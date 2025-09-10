@@ -65,8 +65,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           build-args: |
             BUILD_TS=${{ steps.bt.outputs.ts }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+
 
   deploy_aci:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
