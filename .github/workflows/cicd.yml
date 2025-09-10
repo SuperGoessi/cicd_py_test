@@ -33,4 +33,5 @@ jobs:
     env:
       IMAGE_NAME: python-geo-app
     steps:
-      - uses: actions/checkou
+      - uses: actions/checkout@v4
+
