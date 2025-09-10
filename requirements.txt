@@ -1,0 +1,8 @@
+--only-binary=:all:
+geopandas>=0.14
+shapely>=2.0
+pyproj>=3.6
+fiona>=1.9
+rtree>=1.2
+pytest>=8.2
+flake8>=7.1
