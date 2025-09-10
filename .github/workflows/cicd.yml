@@ -31,4 +31,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     env:
-      IMAGE
+      IMAGE_NAME: python-geo-app
+    steps:
+      - uses: actions/checkou
