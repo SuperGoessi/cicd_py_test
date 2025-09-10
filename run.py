@@ -32,7 +32,7 @@ def main(argv=None):
         targets = gdf.copy()
         targets["geometry"] = targets.geometry.translate(xoff=300, yoff=0)
         dists = nearest_distance(gdf.geometry, targets.geometry)
-        gdf_buf["nearest_demo_dist"] = dists  # 让结果里也带上以便检查
+        gdf_buf["nearest_demo_dist"] = dists
 
 
     out_path = Path(args.output)

@@ -18,15 +18,22 @@ def union_area(gdf: gpd.GeoDataFrame) -> float:
 
 
 def nearest_distance(sources: gpd.GeoSeries, targets: gpd.GeoSeries) -> list[float]:
-    if len(targets) == 0:
+    if sources.empty:
+        return []
+    if targets.empty:
         raise ValueError("targets is empty")
-    target_sindex = targets.sindex
-    dists = []
-    for geom in sources:
-        possible_matches_index = list(target_sindex.nearest(geom.bounds, 1))[0:1]
-        candidate = targets.iloc[possible_matches_index[0]]
-        dists.append(geom.distance(candidate))
-    return dists
+
+    if sources.crs != targets.crs:
+        targets = targets.to_crs(sources.crs)
+
+    sources = sources[~sources.is_empty & sources.notna()]
+    targets = targets[~targets.is_empty & targets.notna()]
+
+    s = gpd.GeoDataFrame(geometry=sources)
+    t = gpd.GeoDataFrame(geometry=targets)
+
+    joined = gpd.sjoin_nearest(s, t, how="left", distance_col="dist")
+    return joined["dist"].tolist()
 
 
 def make_demo_points(n: int = 5) -> gpd.GeoDataFrame:
