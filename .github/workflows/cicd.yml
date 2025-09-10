@@ -73,25 +73,38 @@ jobs:
     needs: build_and_push
     env:
       IMAGE: ${{ secrets.ACR_LOGIN_SERVER }}/python-geo-app:latest
-      PORT: "5000"                 # 如果你的服务用 80，就改这里为 "80"
-      LOCATION: francecentral      # 你的订阅限制区域
+      PORT: "5000"
+      LOCATION: francecentral
     steps:
       - name: Azure login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}   # SP JSON（--sdk-auth 输出）
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Deploy (recreate ACI to pull latest)
+      - name: Deploy (recreate ACI with Linux OSType)
         uses: azure/CLI@v2
         with:
           inlineScript: |
-            set -e
+            set -euo pipefail
             RG="${{ secrets.AZ_RG }}"
             NAME="${{ secrets.ACI_NAME }}"
             DNS="${{ secrets.ACI_DNS_LABEL }}"
             LOC="${LOCATION}"
+            IMAGE="${IMAGE}"
+            PORT="${PORT}"
+            ACR="${{ secrets.ACR_LOGIN_SERVER }}"
+            ACR_USER="${{ secrets.ACR_USERNAME }}"
+            ACR_PASS="${{ secrets.ACR_PASSWORD }}"
 
-            # 删旧实例，避免不拉新镜像的问题
+            echo "RG=$RG NAME=$NAME DNS=$DNS LOC=$LOC IMAGE=$IMAGE PORT=$PORT"
+
+            for v in RG NAME DNS LOC IMAGE PORT ACR ACR_USER ACR_PASS; do
+              if [ -z "${!v}" ]; then
+                echo "::error ::Missing required variable: $v"
+                exit 1
+              fi
+            done
+
             if az container show -g "$RG" -n "$NAME" &>/dev/null; then
               az container delete -g "$RG" -n "$NAME" --yes
               until ! az container show -g "$RG" -n "$NAME" &>/dev/null; do sleep 3; done
@@ -100,27 +113,20 @@ jobs:
             az container create \
               --resource-group "$RG" \
               --name "$NAME" \
-              --image "${IMAGE}" \
+              --image "$IMAGE" \
               --location "$LOC" \
+              --os-type Linux \
               --cpu 1 --memory 1.5 \
-              --ports ${PORT} \
+              --ports "$PORT" \
               --dns-name-label "$DNS" \
-              --environment-variables PORT=${PORT} \
-              --registry-login-server "${{ secrets.ACR_LOGIN_SERVER }}" \
-              --registry-username "${{ secrets.ACR_USERNAME }}" \
-              --registry-password "${{ secrets.ACR_PASSWORD }}" \
+              --environment-variables PORT="$PORT" \
+              --registry-login-server "$ACR" \
+              --registry-username "$ACR_USER" \
+              --registry-password "$ACR_PASS" \
               --restart-policy Always
 
             FQDN=$(az container show -g "$RG" -n "$NAME" --query ipAddress.fqdn -o tsv)
-            echo "FQDN=$FQDN" >> $GITHUB_OUTPUT
-            {
-              echo "### Deployed to ACI"
-              echo ""
-              echo "- **FQDN**: \`$FQDN\`"
-              echo "- **Region**: ${LOC}"
-              echo "- **Port**: ${PORT}"
-              echo ""
-              if [ -n "$FQDN" ]; then
-                echo "访问：\`http://$FQDN:${PORT}\`"
-              fi
-            } >> $GITHUB_STEP_SUMMARY
+            echo "FQDN=$FQDN"
+            echo "### Deployed to ACI" >> $GITHUB_STEP_SUMMARY
+            echo "- FQDN: \`$FQDN\`" >> $GITHUB_STEP_SUMMARY
+            echo "- URL:  \`http://$FQDN:${PORT}\`" >> $GITHUB_STEP_SUMMARY
