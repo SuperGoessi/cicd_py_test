@@ -1,15 +1,12 @@
+# Dockerfile
 FROM python:3.11-slim
 
 WORKDIR /app
-COPY requirements.txt /app/
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libspatialindex-dev \
-    && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-RUN pip install --upgrade pip \
- && pip install --only-binary=:all: -r requirements.txt
+COPY . .
 
-COPY . /app
-
-CMD ["python", "src/app.py", "--nearest-demo", "--buffer", "75", "--output", "output.geojson"]
+# 容器启动时默认执行 run.py
+CMD ["python", "run.py"]
