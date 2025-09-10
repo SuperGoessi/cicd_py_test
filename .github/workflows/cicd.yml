@@ -2,32 +2,34 @@ name: Python CI/CD
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
+    branches: [ main ]     # 只有 push 到 main 才会部署
+  pull_request:            # PR 只跑测试（不部署）
+
+concurrency:
+  group: prod-deploy
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest flake8 geopandas shapely pyproj fiona rtree
-
+          pip install -r requirements.txt
+          pip install pytest flake8
       - name: Run flake8 (non-blocking)
         run: flake8 . || true
-
       - name: Run pytest
         run: pytest
 
   build_and_push:
+    if: github.event_name == 'push'  # 仅 push 时构建/推送镜像
     runs-on: ubuntu-latest
     needs: test
     env:
@@ -35,3 +37,91 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Compute Docker tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      - name: Set build timestamp (force new digest)
+        id: bt
+        run: echo "ts=${GITHUB_RUN_ID}-${GITHUB_RUN_NUMBER}" >> $GITHUB_OUTPUT
+
+      - name: Login to ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}   # geopy.azurecr.io
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            BUILD_TS=${{ steps.bt.outputs.ts }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy_aci:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: build_and_push
+    env:
+      IMAGE: ${{ secrets.ACR_LOGIN_SERVER }}/python-geo-app:latest
+      PORT: "5000"                 # 如果你的服务用 80，就改这里为 "80"
+      LOCATION: francecentral      # 你的订阅限制区域
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}   # SP JSON（--sdk-auth 输出）
+
+      - name: Deploy (recreate ACI to pull latest)
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            set -e
+            RG="${{ secrets.AZ_RG }}"
+            NAME="${{ secrets.ACI_NAME }}"
+            DNS="${{ secrets.ACI_DNS_LABEL }}"
+            LOC="${LOCATION}"
+
+            # 删旧实例，避免不拉新镜像的问题
+            if az container show -g "$RG" -n "$NAME" &>/dev/null; then
+              az container delete -g "$RG" -n "$NAME" --yes
+              until ! az container show -g "$RG" -n "$NAME" &>/dev/null; do sleep 3; done
+            fi
+
+            az container create \
+              --resource-group "$RG" \
+              --name "$NAME" \
+              --image "${IMAGE}" \
+              --location "$LOC" \
+              --cpu 1 --memory 1.5 \
+              --ports ${PORT} \
+              --dns-name-label "$DNS" \
+              --environment-variables PORT=${PORT} \
+              --registry-login-server "${{ secrets.ACR_LOGIN_SERVER }}" \
+              --registry-username "${{ secrets.ACR_USERNAME }}" \
+              --registry-password "${{ secrets.ACR_PASSWORD }}" \
+              --restart-policy Always
+
+            FQDN=$(az container show -g "$RG" -n "$NAME" --query ipAddress.fqdn -o tsv)
+            echo "FQDN=$FQDN" >> $GITHUB_OUTPUT
+            {
+              echo "### Deployed to ACI"
+              echo ""
+              echo "- **FQDN**: \`$FQDN\`"
+              echo "- **Region**: ${LOC}"
+              echo "- **Port**: ${PORT}"
+              echo ""
+              if [ -n "$FQDN" ]; then
+                echo "访问：\`http://$FQDN:${PORT}\`"
+              fi
+            } >> $GITHUB_STEP_SUMMARY
